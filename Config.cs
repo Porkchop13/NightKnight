@@ -66,7 +66,7 @@ namespace NightKnight
                         ["Sunday"] = "22:20"
                     },
                     StatsFile = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                         "NightKnight",
                         "stats.csv"
                     )
