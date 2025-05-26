@@ -1,14 +1,7 @@
 // NightKnight – Tray utility with dynamic JSON config, daily stats log, reliable toasts & fullscreen popup fallback
-// Build with: dotnet new winforms -n NightKnight -f net9.0-windows10.0.17763.0
-// Add NuGet: dotnet add package Microsoft.Toolkit.Uwp.Notifications
-// Add COM/NuGet ref: IWshRuntimeLibrary (for shortcut creator, if desired)
-// Replace Program.cs with this file, then:
-// dotnet publish -c Release -p:PublishSingleFile=true -p:SelfContained=true -r win-x64
 
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Toolkit.Uwp.Notifications;
 using Windows.UI.Notifications;
 using Timer = System.Windows.Forms.Timer;
@@ -17,108 +10,6 @@ using Windows.Data.Xml.Dom;
 
 namespace NightKnight
 {
-    // Native P/Invoke methods
-    internal static partial class NativeMethods
-    {
-        [DllImport("user32.dll")]
-        internal static extern bool LockWorkStation();
-
-        [DllImport("user32.dll")]
-        internal static extern bool ExitWindowsEx(uint uFlags, uint dwReason);
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        internal static extern bool BringWindowToTop(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        internal static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        internal static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll")]
-        internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-        [StructLayout(LayoutKind.Sequential)]
-        internal struct RECT
-        {
-            public int Left;        // x position of upper-left corner
-            public int Top;         // y position of upper-left corner
-            public int Right;       // x position of lower-right corner
-            public int Bottom;      // y position of lower-right corner
-        }
-
-        internal const int SW_SHOW = 5;
-        internal const int SW_SHOWNORMAL = 1;
-    }
-
-    // Configuration loaded from Settings.json (auto-generated on first run).
-    public class Config
-    {
-        [JsonPropertyName("bedtimes")]
-        public Dictionary<string, string>? Bedtimes { get; set; }
-
-        [JsonPropertyName("disableFocusStealing")]
-        public bool DisableFocusStealing { get; set; } = false;
-
-        [JsonPropertyName("enableAutoLogoff")]
-        public bool EnableAutoLogoff { get; set; } = false;
-
-        [JsonPropertyName("graceMinutesAfterLock")]
-        public int GraceMinutesAfterLock { get; set; } = 5;
-
-        [JsonPropertyName("toastRepeatMinutes")]
-        public int ToastRepeatMinutes { get; set; } = 5;
-
-        [JsonPropertyName("statsFile")]
-        public string? StatsFile { get; set; }
-
-        [JsonPropertyName("warningMinutesBefore")]
-        public int WarningMinutesBefore { get; set; } = 15;
-
-        public static string ConfigPath =>
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Settings.json");
-
-        private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
-
-        public static Config Load()
-        {
-            if (!File.Exists(ConfigPath))
-            {
-                var def = new Config
-                {
-                    Bedtimes = new Dictionary<string, string>
-                    {
-                        ["Monday"] = "22:15",
-                        ["Tuesday"] = "22:15",
-                        ["Wednesday"] = "22:15",
-                        ["Thursday"] = "22:15",
-                        ["Friday"] = "23:15",
-                        ["Saturday"] = "23:15",
-                        ["Sunday"] = "22:15"
-                    },
-                    StatsFile = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                        "NightKnight",
-                        "stats.csv"
-                    )
-                };
-                Directory.CreateDirectory(Path.GetDirectoryName(def.StatsFile!)!);
-                File.WriteAllText(
-                    ConfigPath,
-                    JsonSerializer.Serialize(def, Options)
-                );
-                return def;
-            }
-
-            var json = File.ReadAllText(ConfigPath);
-            return JsonSerializer.Deserialize<Config>(json)!;
-        }
-    }
-
     internal static class Program
     {
         // Windows AppUserModelID for toasts
@@ -180,27 +71,45 @@ namespace NightKnight
 
     internal class ToolbarContext : ApplicationContext
     {
-        private readonly NotifyIcon _tray;
+        private NotifyIcon? _tray;
         private readonly Timer _timer;
-        private readonly FileSystemWatcher _watcher;
+        private FileSystemWatcher? _watcher;
         private Config _cfg;
 
         private bool _cancelTonight;
         private bool _locked;
         private DateTime _lockTime;
         private DateTime _lastToast;
-        private string _todayDate = DateTime.Now.ToString("yyyy-MM-dd");
+        private string _todayDate = DateTime.Now.ToString(DateFormatString);
+
+        // Constants
+        private const string TrayTextRunning = "NightKnight – running";
+        private const string TrayTextCancelled = "NightKnight – cancelled for tonight";
+        private const string DateFormatString = "yyyy-MM-dd";
+        private const string NotepadExe = "notepad.exe";
+        private const int TimerIntervalMilliseconds = 60_000;
 
         public ToolbarContext()
         {
             _cfg = Config.Load();
 
+            InitializeTrayAndMenu();
+            InitializeConfigWatcher();
+
+            // 1-min tick timer
+            _timer = new Timer { Interval = TimerIntervalMilliseconds };
+            _timer.Tick += (_, _) => Tick();
+            _timer.Start();
+        }
+
+        private void InitializeTrayAndMenu()
+        {
             // Tray setup
             _tray = new NotifyIcon
             {
                 Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Shield,
                 Visible = true,
-                Text = "NightKnight – running"
+                Text = TrayTextRunning
             };
             var cm = new ContextMenuStrip();
             var cancelItem = new ToolStripMenuItem("Cancel tonight only");
@@ -208,7 +117,7 @@ namespace NightKnight
             {
                 _cancelTonight = true;
                 cancelItem.Enabled = false;
-                _tray.Text = "NightKnight – cancelled for tonight";
+                if (_tray != null) _tray.Text = TrayTextCancelled;
                 Log("CancelTonight", DateTime.Now, "user override");
             };
             cm.Items.Add(cancelItem);
@@ -221,17 +130,24 @@ namespace NightKnight
             {
                 try
                 {
-                    // Create the config file if it doesn't exist
+                    // Ensure the config file exists before trying to open it.
+                    // Config.Load() might create it or load defaults if it doesn't.
                     if (!File.Exists(Config.ConfigPath))
                     {
-                        _cfg = Config.Load();
+                        Config.Load(); // This might create/populate the file
+                    }
+                    // If it still doesn't exist after attempting to load/create, handle error or let Process.Start fail.
+                    if (!File.Exists(Config.ConfigPath))
+                    {
+                        ShowToast($"Config file not found at {Config.ConfigPath} and could not be created.");
+                        Debug.WriteLine($"Config file not found at {Config.ConfigPath} and could not be created.");
+                        return;
                     }
 
-                    // Open with notepad explicitly
                     var startInfo = new ProcessStartInfo
                     {
-                        FileName = "notepad.exe",
-                        Arguments = Config.ConfigPath,
+                        FileName = NotepadExe,
+                        Arguments = $"\"{Config.ConfigPath}\"", // Ensure path is quoted for safety
                         UseShellExecute = true
                     };
 
@@ -250,47 +166,103 @@ namespace NightKnight
             }));
             cm.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitApplication()));
             _tray.ContextMenuStrip = cm;
+        }
 
+        private void InitializeConfigWatcher()
+        {
             // Watch for JSON config edits
-            _watcher = new FileSystemWatcher(Path.GetDirectoryName(Config.ConfigPath)!)
+            // Ensure DirectoryName is not null before using it.
+            var configDir = Path.GetDirectoryName(Config.ConfigPath);
+            if (string.IsNullOrEmpty(configDir))
+            {
+                Debug.WriteLine($"Could not determine directory for config path: {Config.ConfigPath}");
+                ShowToast("Error: Config path directory not found.");
+                return;
+            }
+
+            _watcher = new FileSystemWatcher(configDir)
             {
                 Filter = Path.GetFileName(Config.ConfigPath),
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
+                EnableRaisingEvents = true
             };
             _watcher.Changed += (_, _) =>
             {
                 _cfg = Config.Load();
                 ShowToast("Config reloaded");
             };
-            _watcher.EnableRaisingEvents = true;
+        }
 
-            // 1-min tick timer
-            _timer = new Timer { Interval = 60_000 };
-            _timer.Tick += (_, _) => Tick();
-            _timer.Start();
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _timer?.Dispose();
+                _tray?.Dispose();
+                _watcher?.Dispose();
+            }
+            base.Dispose(disposing);
         }
 
         private void Tick()
         {
             var now = DateTime.Now;
+            HandleDailyReset(now);
+            if (_cancelTonight) return;
+            ProcessBedtimeChecks(now);
+        }
 
+        private void HandleDailyReset(DateTime now)
+        {
             // Daily reset at midnight
-            if (_todayDate != now.ToString("yyyy-MM-dd"))
+            if (_todayDate != now.ToString(DateFormatString)) // Use constant
             {
-                _todayDate = now.ToString("yyyy-MM-dd");
+                _todayDate = now.ToString(DateFormatString); // Use constant
                 _cancelTonight = false;
                 _locked = false;
-                _tray.Text = "NightKnight – running";
+                if (_tray != null) _tray.Text = TrayTextRunning;
+            }
+        }
+
+        private void ProcessBedtimeChecks(DateTime now)
+        {
+            if (!TryCalculateMinutesToBedtime(now, out double minutesToBed))
+            {
+                return; // Error handled in TryCalculateMinutesToBedtime
             }
 
-            if (_cancelTonight) return;
+            HandleBedtimeWarning(now, minutesToBed);
+            HandleBedtimeLock(now, minutesToBed);
+            HandleAutoLogoff(now); // Depends on _locked state, not directly minutesToBed
+        }
 
-            // Compute minutes to bedtime
-            string bedtimeStr = _cfg.Bedtimes![now.DayOfWeek.ToString()];
-            DateTime bedtimeToday = DateTime.Parse($"{now:yyyy-MM-dd} {bedtimeStr}");
-            double minutesToBed = (bedtimeToday - now).TotalMinutes;
+        private bool TryCalculateMinutesToBedtime(DateTime now, out double minutesToBed)
+        {
+            minutesToBed = 0;
+            if (_cfg.Bedtimes == null || !_cfg.Bedtimes.TryGetValue(now.DayOfWeek.ToString(), out var bedtimeStr) || string.IsNullOrEmpty(bedtimeStr))
+            {
+                Debug.WriteLine($"Bedtime not configured or invalid for {now.DayOfWeek}.");
+                return false;
+            }
 
-            // Warning toasts
+            DateTime bedtimeToday;
+            try
+            {
+                bedtimeToday = DateTime.Parse($"{now.ToString(DateFormatString)} {bedtimeStr}");
+            }
+            catch (FormatException ex)
+            {
+                Debug.WriteLine($"Invalid bedtime format for {now.DayOfWeek}: {bedtimeStr}. Error: {ex.Message}");
+                ShowToast($"Error: Invalid bedtime format for {now.DayOfWeek}.");
+                return false;
+            }
+
+            minutesToBed = (bedtimeToday - now).TotalMinutes;
+            return true;
+        }
+
+        private void HandleBedtimeWarning(DateTime now, double minutesToBed)
+        {
             if (minutesToBed <= _cfg.WarningMinutesBefore && minutesToBed > 0)
             {
                 if ((now - _lastToast).TotalMinutes >= _cfg.ToastRepeatMinutes)
@@ -299,8 +271,11 @@ namespace NightKnight
                     _lastToast = now;
                 }
             }
-            // Lock at bedtime
-            else if (minutesToBed <= 0 && !_locked)
+        }
+
+        private void HandleBedtimeLock(DateTime now, double minutesToBed)
+        {
+            if (minutesToBed <= 0 && !_locked)
             {
                 ShowToast("Bedtime reached. Locking workstation now.");
                 NativeMethods.LockWorkStation();
@@ -308,13 +283,15 @@ namespace NightKnight
                 _lockTime = now;
                 Log("Lock", now, "workstation locked");
             }
+        }
 
-            // Force log-off after grace period if enabled
+        private void HandleAutoLogoff(DateTime now)
+        {
             if (_cfg.EnableAutoLogoff && _locked && (now - _lockTime).TotalMinutes >= _cfg.GraceMinutesAfterLock)
             {
-                ShowToast("Logging off. Good night!");
-                Log("Logoff", now, "forced logoff");
-                NativeMethods.ExitWindowsEx(0x00000000, 0);
+                ShowToast("Grace period expired. Logging off now.");
+                Log("Logoff", now, "auto logoff");
+                NativeMethods.ExitWindowsEx(0, 0); //EWX_LOGOFF = 0
             }
         }
 
@@ -349,7 +326,7 @@ namespace NightKnight
             return (windowWidth >= screenWidth * 0.95) && (windowHeight >= screenHeight * 0.95);
         }
 
-        private void ShowFallbackNotification(string message, bool enableFocusStealing)
+        private static void ShowFallbackNotification(string message, bool enableFocusStealing)
         {
             var fallbackThread = new Thread(() =>
             {
@@ -431,7 +408,12 @@ namespace NightKnight
                 }
 
                 // Create toast content
+                string iconPath = Path.Combine(AppContext.BaseDirectory, "NightKnight.ico");
+                Uri iconUri = new($"file:///{iconPath}");
+                Debug.WriteLine($"Toast Icon URI: {iconUri}");
+
                 var toastContent = new ToastContentBuilder()
+                    .AddAppLogoOverride(iconUri)
                     .AddText("NightKnight Reminder")
                     .AddText(message)
                     .GetToastContent();
@@ -457,7 +439,8 @@ namespace NightKnight
                 // If toast setup fails completely, show fallback notification
                 try
                 {
-                    ShowFallbackNotification(message, !_cfg.DisableFocusStealing);
+                    // If _cfg is null, DisableFocusStealing defaults to false, so enableFocusStealing becomes true.
+                    ShowFallbackNotification(message, !(_cfg?.DisableFocusStealing ?? false));
                 }
                 catch
                 {
@@ -468,11 +451,10 @@ namespace NightKnight
 
         private void ExitApplication()
         {
-            _tray.Visible = false;
-            _timer.Stop();
-            _watcher.EnableRaisingEvents = false;
-            _timer.Dispose();
-            _watcher.Dispose();
+            if (_tray != null) _tray.Visible = false;
+            _timer?.Stop(); // Timer is readonly, initialized, but good practice with ?. if other disposables are handled this way.
+            if (_watcher != null) _watcher.EnableRaisingEvents = false;
+            // _timer, _tray, and _watcher will be disposed by the overridden Dispose method when ApplicationContext disposes.
             Application.Exit();
         }
     }
