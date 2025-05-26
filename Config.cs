@@ -17,6 +17,9 @@ namespace NightKnight
         [JsonPropertyName("disableFocusStealing")]
         public bool DisableFocusStealing { get; set; } = false;
 
+        [JsonPropertyName("disableOneMinuteWarning")]
+        public bool DisableOneMinuteWarning { get; set; } = false;
+
         [JsonPropertyName("enableAutoLogoff")]
         public bool EnableAutoLogoff { get; set; } = false;
 

@@ -83,6 +83,7 @@ namespace NightKnight
         private DateTime _lockTime;
         private DateTime _lastToast;
         private string _todayDate = DateTime.Now.ToString(DateFormatString);
+        private bool _oneMinuteWarningShownToday = false;
 
         // Constants
         private const string TrayTextRunning = "NightKnight – running";
@@ -225,6 +226,7 @@ namespace NightKnight
                 _todayDate = now.ToString(DateFormatString); // Use constant
                 _cancelTonight = false;
                 _locked = false;
+                _oneMinuteWarningShownToday = false; // Reset the flag daily
                 if (_tray != null) _tray.Text = TrayTextRunning;
             }
         }
@@ -268,8 +270,20 @@ namespace NightKnight
 
         private void HandleBedtimeWarning(DateTime now, double minutesToBed)
         {
-            if (minutesToBed <= _cfg.WarningMinutesBefore && minutesToBed > 0)
+            // One-minute specific warning
+            if (!_cfg.DisableOneMinuteWarning && minutesToBed > 0 && minutesToBed <= 1 && !_oneMinuteWarningShownToday)
             {
+                ShowToast("Bedtime in 1 minute!");
+                _lastToast = now; // Update lastToast to prevent immediate repeat by general warning
+                _oneMinuteWarningShownToday = true;
+                return; // One-minute warning shown, skip general warning for this tick
+            }
+
+            // General warning
+            // Ensure minutesToBed > 0 to avoid warning after bedtime, and also check !_oneMinuteWarningShownToday to prevent re-warning if 1-min warning is also the configured WarningMinutesBefore
+            if (minutesToBed <= _cfg.WarningMinutesBefore && minutesToBed > 0 && !_oneMinuteWarningShownToday)
+            {
+                // Check if enough time has passed since the last toast
                 if ((now - _lastToast).TotalMinutes >= _cfg.ToastRepeatMinutes)
                 {
                     ShowToast($"Bedtime in {Math.Ceiling(minutesToBed)} minutes.");
