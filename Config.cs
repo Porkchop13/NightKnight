@@ -3,7 +3,6 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Threading; // Required for Thread.Sleep
 
 namespace NightKnight
 {
@@ -58,13 +57,13 @@ namespace NightKnight
                 {
                     Bedtimes = new Dictionary<string, string>
                     {
-                        ["Monday"] = "22:15",
-                        ["Tuesday"] = "22:15",
-                        ["Wednesday"] = "22:15",
-                        ["Thursday"] = "22:15",
-                        ["Friday"] = "23:15",
-                        ["Saturday"] = "23:15",
-                        ["Sunday"] = "22:15"
+                        ["Monday"] = "22:20",
+                        ["Tuesday"] = "22:20",
+                        ["Wednesday"] = "22:20",
+                        ["Thursday"] = "22:20",
+                        ["Friday"] = "23:20",
+                        ["Saturday"] = "23:20",
+                        ["Sunday"] = "22:20"
                     },
                     StatsFile = Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

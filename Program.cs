@@ -36,7 +36,7 @@ namespace NightKnight
             {
                 string shortcutName = "NightKnight";
                 // For single-file app, Assembly.Location is empty. Use AppContext.BaseDirectory and the process name.
-                string exeName = Path.GetFileName(Process.GetCurrentProcess().MainModule!.FileName!); // Get the actual exe name
+                string exeName = Path.GetFileName(Environment.ProcessPath!); // Get the actual exe name
                 string appPath = Path.Combine(AppContext.BaseDirectory, exeName);
                 string startMenuDir =
                     Path.Combine(
@@ -89,7 +89,6 @@ namespace NightKnight
         private const string TrayTextRunning = "NightKnight – running";
         private const string TrayTextCancelled = "NightKnight – cancelled for tonight";
         private const string DateFormatString = "yyyy-MM-dd";
-        private const string NotepadExe = "notepad.exe";
         private const int TimerIntervalMilliseconds = 60_000;
 
         public ToolbarContext()
@@ -108,12 +107,55 @@ namespace NightKnight
         private void InitializeTrayAndMenu()
         {
             // Tray setup
-            // For single-file app, Assembly.Location is empty. Use AppContext.BaseDirectory and the process name.
-            string exeNameForIcon = Path.GetFileName(Process.GetCurrentProcess().MainModule!.FileName!);
-            string appPathForIcon = Path.Combine(AppContext.BaseDirectory, exeNameForIcon);
+            Icon? trayIcon = null;
+            string directIconPath = Path.Combine(AppContext.BaseDirectory, "NightKnight.ico");
+
+            if (File.Exists(directIconPath))
+            {
+                try
+                {
+                    trayIcon = new Icon(directIconPath);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error loading icon from {directIconPath}: {ex.Message}");
+                }
+            }
+            else
+            {
+                Debug.WriteLine($"NightKnight.ico not found at {directIconPath}. Ensure 'Copy to Output Directory' is set. Attempting fallbacks.");
+            }
+
+            // Fallback to extracting from entry assembly if direct load failed
+            if (trayIcon == null)
+            {
+                string? assemblyLocation = Assembly.GetEntryAssembly()?.Location;
+                if (!string.IsNullOrEmpty(assemblyLocation) && File.Exists(assemblyLocation))
+                {
+                    try
+                    {
+                        trayIcon = Icon.ExtractAssociatedIcon(assemblyLocation);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error extracting icon from assembly {assemblyLocation}: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    // This case is expected for single-file apps, so logging might be too noisy unless it's a true unexpected failure.
+                    // Only log if assemblyLocation was expected to be valid but wasn't found.
+                    if (!string.IsNullOrEmpty(assemblyLocation) && !File.Exists(assemblyLocation))
+                    {
+                        Debug.WriteLine($"Assembly for icon extraction not found at expected location: {assemblyLocation}");
+                    }
+                    // If assemblyLocation is null/empty (single-file app), this is normal, no specific log needed here for that case.
+                }
+            }
+
             _tray = new NotifyIcon
             {
-                Icon = Icon.ExtractAssociatedIcon(appPathForIcon) ?? SystemIcons.Shield,
+                Icon = trayIcon ?? SystemIcons.Application, // Use loaded/extracted icon or fallback
                 Visible = true,
                 Text = TrayTextRunning
             };
@@ -152,17 +194,10 @@ namespace NightKnight
 
                     var startInfo = new ProcessStartInfo
                     {
-                        FileName = NotepadExe,
-                        Arguments = $"\"{Config.ConfigPath}\"", // Ensure path is quoted for safety
-                        UseShellExecute = true
+                        FileName = Config.ConfigPath, // Use the config path directly
+                        UseShellExecute = true       // This tells the OS to use the default handler
                     };
-
-                    var process = Process.Start(startInfo);
-                    if (process == null)
-                    {
-                        ShowToast("Failed to start Notepad");
-                        Debug.WriteLine("Failed to start Notepad");
-                    }
+                    Process.Start(startInfo);
                 }
                 catch (Exception ex)
                 {

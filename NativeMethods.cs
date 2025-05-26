@@ -38,7 +38,6 @@ namespace NightKnight
             public int Bottom;      // y position of lower-right corner
         }
 
-        internal const int SW_SHOW = 5;
         internal const int SW_SHOWNORMAL = 1;
     }
 }
