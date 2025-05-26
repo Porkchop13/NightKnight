@@ -35,7 +35,9 @@ namespace NightKnight
             try
             {
                 string shortcutName = "NightKnight";
-                string appPath = Assembly.GetExecutingAssembly().Location;
+                // For single-file app, Assembly.Location is empty. Use AppContext.BaseDirectory and the process name.
+                string exeName = Path.GetFileName(Process.GetCurrentProcess().MainModule!.FileName!); // Get the actual exe name
+                string appPath = Path.Combine(AppContext.BaseDirectory, exeName);
                 string startMenuDir =
                     Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
@@ -55,7 +57,7 @@ namespace NightKnight
                         dynamic shell = Activator.CreateInstance(wscriptShellType)!;
                         dynamic shortcut = shell.CreateShortcut(linkPath);
                         shortcut.TargetPath = appPath;
-                        shortcut.WorkingDirectory = Path.GetDirectoryName(appPath);
+                        shortcut.WorkingDirectory = AppContext.BaseDirectory; // BaseDirectory is the working directory
                         shortcut.IconLocation = appPath;
                         shortcut.Description = "NightKnight – your bedtime enforcer";
                         shortcut.Save();
@@ -105,9 +107,12 @@ namespace NightKnight
         private void InitializeTrayAndMenu()
         {
             // Tray setup
+            // For single-file app, Assembly.Location is empty. Use AppContext.BaseDirectory and the process name.
+            string exeNameForIcon = Path.GetFileName(Process.GetCurrentProcess().MainModule!.FileName!);
+            string appPathForIcon = Path.Combine(AppContext.BaseDirectory, exeNameForIcon);
             _tray = new NotifyIcon
             {
-                Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Shield,
+                Icon = Icon.ExtractAssociatedIcon(appPathForIcon) ?? SystemIcons.Shield,
                 Visible = true,
                 Text = TrayTextRunning
             };

@@ -32,8 +32,18 @@ namespace NightKnight
         [JsonPropertyName("warningMinutesBefore")]
         public int WarningMinutesBefore { get; set; } = 15;
 
-        public static string ConfigPath =>
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Settings.json");
+        public static readonly string ConfigPath;
+
+        static Config() // Static constructor to initialize ConfigPath
+        {
+            string appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string companyName = "Porkchop13"; // Or your actual company/developer name
+            string appName = "NightKnight";
+            ConfigPath = Path.Combine(appDataPath, companyName, appName, "Settings.json");
+
+            // Ensure the directory exists so the file can be created
+            Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+        }
 
         private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

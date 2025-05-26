@@ -24,6 +24,10 @@
             "args": [
                 "publish",
                 "${workspaceFolder}/NightKnight.csproj",
+                "-c", "Release",
+                "-r", "win-x64",
+                "/p:PublishSingleFile=true",
+                "/p:SelfContained=true",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary;ForceNoAlign"
             ],
