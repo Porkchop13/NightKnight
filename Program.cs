@@ -12,6 +12,8 @@ using System.Text.Json.Serialization;
 using Microsoft.Toolkit.Uwp.Notifications;
 using Windows.UI.Notifications;
 using Timer = System.Windows.Forms.Timer;
+using System.Diagnostics;
+using Windows.Data.Xml.Dom;
 
 namespace NightKnight
 {
@@ -23,6 +25,34 @@ namespace NightKnight
 
         [DllImport("user32.dll")]
         internal static extern bool ExitWindowsEx(uint uFlags, uint dwReason);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        internal static extern bool BringWindowToTop(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        internal static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct RECT
+        {
+            public int Left;        // x position of upper-left corner
+            public int Top;         // y position of upper-left corner
+            public int Right;       // x position of lower-right corner
+            public int Bottom;      // y position of lower-right corner
+        }
+
+        internal const int SW_SHOW = 5;
+        internal const int SW_SHOWNORMAL = 1;
     }
 
     // Configuration loaded from Settings.json (auto-generated on first run).
@@ -31,17 +61,23 @@ namespace NightKnight
         [JsonPropertyName("bedtimes")]
         public Dictionary<string, string>? Bedtimes { get; set; }
 
-        [JsonPropertyName("warningMinutesBefore")]
-        public int WarningMinutesBefore { get; set; } = 15;
+        [JsonPropertyName("disableFocusStealing")]
+        public bool DisableFocusStealing { get; set; } = false;
 
-        [JsonPropertyName("toastRepeatMinutes")]
-        public int ToastRepeatMinutes { get; set; } = 5;
+        [JsonPropertyName("enableAutoLogoff")]
+        public bool EnableAutoLogoff { get; set; } = false;
 
         [JsonPropertyName("graceMinutesAfterLock")]
         public int GraceMinutesAfterLock { get; set; } = 5;
 
+        [JsonPropertyName("toastRepeatMinutes")]
+        public int ToastRepeatMinutes { get; set; } = 5;
+
         [JsonPropertyName("statsFile")]
         public string? StatsFile { get; set; }
+
+        [JsonPropertyName("warningMinutesBefore")]
+        public int WarningMinutesBefore { get; set; } = 15;
 
         public static string ConfigPath =>
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Settings.json");
@@ -93,14 +129,14 @@ namespace NightKnight
         private static void Main()
         {
             // Ensure Windows toasts will appear as popups
-            _ = SetCurrentProcessExplicitAppUserModelID("com.yourcompany.NightKnight");
+            _ = SetCurrentProcessExplicitAppUserModelID("com.Porkchop13.NightKnight");
 
             // (Optional) auto-create Start Menu shortcut for proper toast support
             TryCreateShortcut();
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new BouncerContext());
+            Application.Run(new ToolbarContext());
         }
 
         private static void TryCreateShortcut()
@@ -142,7 +178,7 @@ namespace NightKnight
         }
     }
 
-    internal class BouncerContext : ApplicationContext
+    internal class ToolbarContext : ApplicationContext
     {
         private readonly NotifyIcon _tray;
         private readonly Timer _timer;
@@ -155,14 +191,14 @@ namespace NightKnight
         private DateTime _lastToast;
         private string _todayDate = DateTime.Now.ToString("yyyy-MM-dd");
 
-        public BouncerContext()
+        public ToolbarContext()
         {
             _cfg = Config.Load();
 
             // Tray setup
             _tray = new NotifyIcon
             {
-                Icon = System.Drawing.SystemIcons.Exclamation,
+                Icon = SystemIcons.Shield,
                 Visible = true,
                 Text = "NightKnight – running"
             };
@@ -180,6 +216,37 @@ namespace NightKnight
             {
                 _cfg = Config.Load();
                 ShowToast("Config reloaded");
+            }));
+            cm.Items.Add(new ToolStripMenuItem("Open config file", null, (_, _) =>
+            {
+                try
+                {
+                    // Create the config file if it doesn't exist
+                    if (!File.Exists(Config.ConfigPath))
+                    {
+                        _cfg = Config.Load();
+                    }
+
+                    // Open with notepad explicitly
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = "notepad.exe",
+                        Arguments = Config.ConfigPath,
+                        UseShellExecute = true
+                    };
+
+                    var process = Process.Start(startInfo);
+                    if (process == null)
+                    {
+                        ShowToast("Failed to start Notepad");
+                        Debug.WriteLine("Failed to start Notepad");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ShowToast($"Error opening config: {ex.Message}");
+                    Debug.WriteLine($"Error opening config: {ex.Message}");
+                }
             }));
             cm.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitApplication()));
             _tray.ContextMenuStrip = cm;
@@ -242,8 +309,8 @@ namespace NightKnight
                 Log("Lock", now, "workstation locked");
             }
 
-            // Force log-off after grace period
-            if (_locked && (now - _lockTime).TotalMinutes >= _cfg.GraceMinutesAfterLock)
+            // Force log-off after grace period if enabled
+            if (_cfg.EnableAutoLogoff && _locked && (now - _lockTime).TotalMinutes >= _cfg.GraceMinutesAfterLock)
             {
                 ShowToast("Logging off. Good night!");
                 Log("Logoff", now, "forced logoff");
@@ -257,52 +324,146 @@ namespace NightKnight
             File.AppendAllText(_cfg.StatsFile!, line);
         }
 
-        private static void ShowToast(string message)
+        private static bool IsFullScreenApplicationRunning()
         {
-            // Native Windows toast
-            var content = new ToastContentBuilder()
-                .AddText("NightKnight")
-                .AddText(message)
-                .GetToastContent();
+            // Get foreground window
+            var hwnd = NativeMethods.GetForegroundWindow();
+            if (hwnd == IntPtr.Zero)
+                return false;
 
-            var toast = new ToastNotification(content.GetXml());
-            ToastNotificationManager
-                .CreateToastNotifier("com.yourcompany.NightKnight")
-                .Show(toast);
+            // Get window rectangle
+            if (!NativeMethods.GetWindowRect(hwnd, out NativeMethods.RECT rect))
+                return false;
 
-            // Fallback popup for fullscreen apps
-            var thread = new Thread(() =>
+            // Check if it covers the entire screen
+            // First ensure the primary screen is available
+            if (Screen.PrimaryScreen == null)
+                return false;
+
+            var screenWidth = Screen.PrimaryScreen.Bounds.Width;
+            var screenHeight = Screen.PrimaryScreen.Bounds.Height;
+            var windowWidth = rect.Right - rect.Left;
+            var windowHeight = rect.Bottom - rect.Top;
+
+            // If the window covers at least 95% of the screen, consider it full-screen
+            return (windowWidth >= screenWidth * 0.95) && (windowHeight >= screenHeight * 0.95);
+        }
+
+        private void ShowFallbackNotification(string message, bool enableFocusStealing)
+        {
+            var fallbackThread = new Thread(() =>
             {
-                var form = new Form
+                Form? fallbackForm = null;
+                Timer? closeTimer = null;
+                try
                 {
-                    TopMost = true,
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.CenterScreen,
-                    Size = new Size(500, 120),
-                    BackColor = Color.Black,
-                    Opacity = 0.9,
-                    ShowInTaskbar = false
-                };
-                var label = new Label
+                    fallbackForm = new Form
+                    {
+                        TopMost = true,
+                        FormBorderStyle = FormBorderStyle.None,
+                        StartPosition = FormStartPosition.CenterScreen,
+                        Size = new Size(500, 120),
+                        BackColor = Color.Black,
+                        Opacity = 0.9,
+                        ShowInTaskbar = true // Show in taskbar to aid in focus stealing
+                    };
+                    var label = new Label
+                    {
+                        Text = message,
+                        Dock = DockStyle.Fill,
+                        ForeColor = Color.White,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                        Font = new Font("Segoe UI", 14, FontStyle.Bold)
+                    };
+                    fallbackForm.Controls.Add(label);
+
+                    closeTimer = new Timer { Interval = 4000 };
+                    closeTimer.Tick += (_, __) =>
+                    {
+                        if (fallbackForm != null && !fallbackForm.IsDisposed)
+                        {
+                            fallbackForm.Close();
+                        }
+                    };
+                    fallbackForm.Shown += (_, __) =>
+                    {
+                        closeTimer?.Start();
+
+                        // Force focus to the form if enabled in configuration
+                        if (enableFocusStealing)
+                        {
+                            NativeMethods.ShowWindow(fallbackForm.Handle, NativeMethods.SW_SHOWNORMAL);
+                            NativeMethods.BringWindowToTop(fallbackForm.Handle);
+                            NativeMethods.SetForegroundWindow(fallbackForm.Handle);
+
+                            // Ensure form is active
+                            fallbackForm.Activate();
+                            fallbackForm.Focus();
+                        }
+                    };
+                    Application.Run(fallbackForm);
+                }
+                finally
                 {
-                    Text = message,
-                    Dock = DockStyle.Fill,
-                    ForeColor = Color.White,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    Font = new Font("Segoe UI", 14, FontStyle.Bold)
-                };
-                form.Controls.Add(label);
-                var closeTimer = new Timer { Interval = 4000, Enabled = true };
-                closeTimer.Tick += (_, __) =>
-                {
-                    closeTimer.Stop();
-                    form.Close();
-                };
-                form.Shown += (_, __) => closeTimer.Start();
-                Application.Run(form);
+                    closeTimer?.Stop();
+                    closeTimer?.Dispose();
+                    fallbackForm?.Dispose();
+                }
             });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
+            fallbackThread.SetApartmentState(ApartmentState.STA);
+            fallbackThread.IsBackground = true;
+            fallbackThread.Start();
+        }
+
+        private void ShowToast(string message)
+        {
+            try
+            {
+                // Capture config value for use in the thread
+                bool enableFocusStealing = !_cfg.DisableFocusStealing;
+
+                // Check if full-screen app is running and go straight to fallback if so
+                if (IsFullScreenApplicationRunning())
+                {
+                    Debug.WriteLine("Full-screen application detected. Using fallback notification.");
+                    ShowFallbackNotification(message, enableFocusStealing);
+                    return;
+                }
+
+                // Create toast content
+                var toastContent = new ToastContentBuilder()
+                    .AddText("NightKnight Reminder")
+                    .AddText(message)
+                    .GetToastContent();
+
+                // Convert to ToastNotification
+                var xmlDoc = new XmlDocument();
+                xmlDoc.LoadXml(toastContent.GetContent());
+                var toast = new ToastNotification(xmlDoc);
+
+                // Register for the Failed event to show fallback notification
+                toast.Failed += (sender, args) =>
+                {
+                    Debug.WriteLine($"Native toast failed. ErrorCode: {args.ErrorCode}");
+                    ShowFallbackNotification(message, enableFocusStealing);
+                };
+
+                // Show the toast notification
+                ToastNotificationManagerCompat.CreateToastNotifier().Show(toast);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Exception attempting to show native toast: {ex}");
+                // If toast setup fails completely, show fallback notification
+                try
+                {
+                    ShowFallbackNotification(message, !_cfg.DisableFocusStealing);
+                }
+                catch
+                {
+                    // Last resort - nothing we can do if both toast and fallback fail
+                }
+            }
         }
 
         private void ExitApplication()
