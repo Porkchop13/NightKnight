@@ -198,7 +198,7 @@ namespace NightKnight
             // Tray setup
             _tray = new NotifyIcon
             {
-                Icon = SystemIcons.Shield,
+                Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location) ?? SystemIcons.Shield,
                 Visible = true,
                 Text = "NightKnight – running"
             };
