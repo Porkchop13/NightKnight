@@ -7,6 +7,7 @@ using Windows.UI.Notifications;
 using Timer = System.Windows.Forms.Timer;
 using System.Diagnostics;
 using Windows.Data.Xml.Dom;
+using Microsoft.Win32; // Added for SystemEvents
 
 namespace NightKnight
 {
@@ -102,6 +103,9 @@ namespace NightKnight
             _timer = new Timer { Interval = TimerIntervalMilliseconds };
             _timer.Tick += (_, _) => Tick();
             _timer.Start();
+
+            // Subscribe to PowerModeChanged event to handle system resume
+            SystemEvents.PowerModeChanged += SystemEvents_PowerModeChanged;
         }
 
         private void InitializeTrayAndMenu()
@@ -209,6 +213,15 @@ namespace NightKnight
             _tray.ContextMenuStrip = cm;
         }
 
+        private void SystemEvents_PowerModeChanged(object sender, PowerModeChangedEventArgs e)
+        {
+            if (e.Mode == PowerModes.Resume)
+            {
+                Debug.WriteLine("System resumed. Checking for daily reset.");
+                HandleDailyReset(DateTime.Now);
+            }
+        }
+
         private void InitializeConfigWatcher()
         {
             // Watch for JSON config edits
@@ -241,6 +254,9 @@ namespace NightKnight
                 _timer?.Dispose();
                 _tray?.Dispose();
                 _watcher?.Dispose();
+
+                // Unsubscribe from PowerModeChanged event
+                SystemEvents.PowerModeChanged -= SystemEvents_PowerModeChanged;
             }
             base.Dispose(disposing);
         }
